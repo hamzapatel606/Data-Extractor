@@ -36,17 +36,28 @@ INPUT_FOLDER = os.path.join(SCRIPT_DIR, 'input')
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, 'output')
 OUTPUT_PATH = os.path.join(OUTPUT_DIR, 'ASDD_Master.xlsx')
 STATE_PATH = os.path.join(OUTPUT_DIR, '.processed_pdfs.json')
+PARSER_VERSION = '2.0'
 
 # ASDD PDF is portrait A4: 595.28 x 841.89 pt.
 # These boundaries are based on the stable x-coordinates of the native PDF text.
-COLS = {
+DEFAULT_COLS = {
     'S.No': (20, 50),
     'Serial No': (50, 80),
     'EPIC Number': (80, 145),
-    'Elector Name': (145, 295),
-    'Relative Details': (295, 445),
-    'DOB/Age': (445, 490),
-    'Uncollectable Reason': (490, 595),
+    'Elector Name': (145, 282.379),
+    'Relative Details': (282.379, 433.757),
+    'DOB/Age': (433.757, 478.797),
+    'Uncollectable Reason': (478.797, 595),
+}
+
+HEADER_ANCHORS = {
+    'S.No': ('s.no.',),
+    'Serial No': ('serial',),
+    'EPIC Number': ('epic',),
+    'Elector Name': ('elector',),
+    'Relative Details': ('relative',),
+    'DOB/Age': ('dob/age',),
+    'Uncollectable Reason': ('uncollectable',),
 }
 
 # The sample contains standard 3-letter + 7-digit EPICs, plus source records
@@ -109,11 +120,34 @@ def save_state(state):
     os.replace(tmp, STATE_PATH)
 
 
-def col_for_x(cx):
-    for name, (lo, hi) in COLS.items():
+def col_for_x(cx, cols):
+    for name, (lo, hi) in cols.items():
         if lo <= cx < hi:
             return name
     return None
+
+
+def detect_columns(words):
+    """Detect table column starts from the native PDF header coordinates.
+    This avoids assuming a single hard-coded x-position across ASDD exports.
+    """
+    top = [w for w in words if 45 <= w[1] <= 75]
+    starts = {}
+    for name, aliases in HEADER_ANCHORS.items():
+        for w in top:
+            if clean(w[4]).lower() in aliases:
+                starts[name] = w[0]
+                break
+    if len(starts) != len(HEADER_ANCHORS):
+        return DEFAULT_COLS.copy()
+    ordered = sorted(starts.items(), key=lambda kv: kv[1])
+    cols = {}
+    for i, (name, lo) in enumerate(ordered):
+        hi = ordered[i + 1][1] if i + 1 < len(ordered) else 595.28
+        cols[name] = (max(0, lo - 2), hi)
+    # Keep the first two narrow columns aligned with the table's left edge.
+    cols['S.No'] = (20, cols['Serial No'][0])
+    return cols
 
 
 def line_text(words):
@@ -145,14 +179,14 @@ def extract_metadata(words):
     return {'ac_no': ac_no, 'ac_name': ac_name, 'part_no': part_no, 'part_name': part_name}
 
 
-def find_starts(words):
+def find_starts(words, cols):
     starts = []
     for w in words:
         x0, y0, x1, y1, t, *_ = w
         t = clean(t)
         cx = (x0 + x1) / 2
         # Only the first column can begin a record. Exclude footer page numbers.
-        if 20 <= cx < 50 and TABLE_TOP < y0 < TABLE_BOTTOM and RE_INT.fullmatch(t):
+        if cols['S.No'][0] <= cx < cols['S.No'][1] and TABLE_TOP < y0 < TABLE_BOTTOM and RE_INT.fullmatch(t):
             starts.append(w)
     uniq = []
     seen = set()
@@ -164,11 +198,11 @@ def find_starts(words):
     return uniq
 
 
-def words_to_record(rw, pno, page):
-    by_col = {k: [] for k in COLS}
+def words_to_record(rw, pno, page, cols):
+    by_col = {k: [] for k in cols}
     for w in rw:
         cx = (w[0] + w[2]) / 2
-        c = col_for_x(cx)
+        c = col_for_x(cx, cols)
         if c:
             by_col[c].append(w)
 
@@ -177,7 +211,7 @@ def words_to_record(rw, pno, page):
     rec['DOB/Age'] = rec['DOB/Age'].strip('() ')
     rec['PDF Page'] = pno
 
-    useful = [w for w in rw if col_for_x((w[0] + w[2]) / 2)]
+    useful = [w for w in rw if col_for_x((w[0] + w[2]) / 2, cols)]
     if useful:
         x0 = min(w[0] for w in useful)
         y0 = min(w[1] for w in useful)
@@ -200,25 +234,26 @@ def words_to_record(rw, pno, page):
 
 def parse_page(page, pno):
     words = [w for w in page.get_text('words', sort=True) if clean(w[4])]
-    starts = find_starts(words)
+    cols = detect_columns(words)
+    starts = find_starts(words, cols)
     rows = []
 
     for idx, sw in enumerate(starts):
         y_start = sw[1] - ROW_MARGIN
         y_end = starts[idx + 1][1] - ROW_MARGIN if idx + 1 < len(starts) else TABLE_BOTTOM
         rw = [w for w in words if y_start <= w[1] < y_end and w[1] < TABLE_BOTTOM]
-        rows.append(words_to_record(rw, pno, page))
+        rows.append(words_to_record(rw, pno, page, cols))
 
     # Some wrapped rows end exactly at a page boundary. Their remaining words
     # appear above the first numbered row on the next page, e.g. S.No 104 -> 105,
     # S.No 247 -> 248 in the supplied ASDD PDF. Return only genuine table content,
     # never the repeated header.
-    continuation = {k: '' for k in COLS}
+    continuation = {k: '' for k in cols}
     if starts:
         first_y = starts[0][1]
         pre = [w for w in words if TABLE_TOP < w[1] < first_y - 1]
         for w in pre:
-            c = col_for_x((w[0] + w[2]) / 2)
+            c = col_for_x((w[0] + w[2]) / 2, cols)
             if c:
                 continuation[c] = clean((continuation[c] + ' ' + w[4]).strip())
         # Header words sit at y 33-43, below TABLE_TOP, so they are excluded.
@@ -325,7 +360,7 @@ def main():
 
     state = load_state()
     fingerprints = {f: sha256(os.path.join(INPUT_FOLDER, f)) for f in pdfs}
-    new = [f for f in pdfs if state.get(f, {}).get('sha256') != fingerprints[f]]
+    new = [f for f in pdfs if (state.get(f, {}).get('sha256') != fingerprints[f] or state.get(f, {}).get('parser_version') != PARSER_VERSION)]
     done = [f for f in pdfs if f not in new]
 
     if not new:
@@ -396,7 +431,7 @@ def main():
     os.replace(tmp, OUTPUT_PATH)
 
     for f in new:
-        state[f] = {'sha256': fingerprints[f], 'source': 'processed'}
+        state[f] = {'sha256': fingerprints[f], 'source': 'processed', 'parser_version': PARSER_VERSION}
     save_state(state)
 
     suspicious = int(df['Status Mark'].eq('Suspicious').sum())
