@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo ===============================================
-echo   Draft Data Extractor V1.2 - Setup
+echo   Draft Data Extractor V1 - Setup
  echo ===============================================
 echo.
 python -m pip install numpy pandas pytesseract pdf2image pillow openpyxl

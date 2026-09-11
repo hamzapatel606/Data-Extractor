@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo ===============================================
-echo   Draft Data Extractor V1.2
+echo   Draft Data Extractor V1
 echo   PDF -> accurate voter Excel
 echo ===============================================
 echo.

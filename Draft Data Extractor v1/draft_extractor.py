@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Draft Data Extractor V1.2 -> Excel
+Draft Data Extractor V1 -> Excel
 Incremental / safe batch processing
 =========================================================
 The extractor detects voter boxes from the actual PDF layout and OCRs each

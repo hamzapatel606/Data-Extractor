@@ -1,4 +1,4 @@
-DRAFT DATA EXTRACTOR V1.2
+DRAFT DATA EXTRACTOR V1
 =======================
 
 Purpose
